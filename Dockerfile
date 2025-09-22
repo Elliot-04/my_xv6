@@ -1,12 +1,25 @@
 FROM archlinux:latest
 
-RUN pacman-key --init
+RUN \
+    pacman -Syyu --noconfirm && \
+    \
+    pacman -S --noconfirm \
+        gcc \
+        make \
+        perl \
+        wget \
+        git \
+        python \
+        python-pygments \
+        riscv64-elf-gdb \
+        riscv64-elf-gcc \
+        riscv64-elf-binutils \
+        riscv64-elf-newlib \
+        qemu-emulators-full \
+        xxhash && \
+    \
+    pacman -Scc --noconfirm
 
-RUN pacman -Syu --noconfirm
-
-RUN pacman -S --noconfirm gcc make perl wget git python
-
-RUN pacman -S --noconfirm riscv64-elf-gdb riscv64-elf-gcc riscv64-elf-binutils riscv64-elf-newlib qemu-emulators-full
-
-RUN wget -P ~ https://github.com/cyrus-and/gdb-dashboard/raw/master/.gdbinit && \
-    pacman -S --noconfirm python-pygments
+RUN \
+    wget -O ~/.gdbinit https://gitee.com/ftutorials/gdb-dashboard/raw/master/.gdbinit && \
+    echo "set auto-load safe-path /" >> ~/.gdbinit
