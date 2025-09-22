@@ -157,6 +157,9 @@ UPROGS=\
 	$U/_grind\
 	$U/_wc\
 	$U/_zombie\
+	$U/_sleep\
+	$U/_pingpong\
+	$U/_find\
 
 
 ifeq ($(LAB),syscall)
@@ -219,7 +222,8 @@ docker:
 	docker $(DOCKER_RUN_ARGS)
 
 # try to generate a unique GDB port
-GDBPORT = $(shell expr `id -u` % 5000 + 25000)
+# GDBPORT = $(shell expr `id -u` % 5000 + 25000)
+GDBPORT = 25000
 # QEMU's gdb stub command line changed in 0.11
 QEMUGDB = $(shell if $(QEMU) -help | grep -q '^-gdb'; \
 	then echo "-gdb tcp::$(GDBPORT)"; \
