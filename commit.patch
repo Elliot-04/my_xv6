@@ -1,0 +1,322 @@
+diff --git a/.vscode/settings.json b/.vscode/settings.json
+new file mode 100644
+index 0000000..8a6e9eb
+--- /dev/null
++++ b/.vscode/settings.json
+@@ -0,0 +1,6 @@
++{
++    "files.associations": {
++        "user.h": "c",
++        "stat.h": "c"
++    }
++}
+\ No newline at end of file
+diff --git a/Dockerfile b/Dockerfile
+index 4024443..6322f2f 100644
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -1,12 +1,25 @@
+ FROM archlinux:latest
+ 
+-RUN pacman-key --init
++RUN \
++    pacman -Syyu --noconfirm && \
++    \
++    pacman -S --noconfirm \
++        gcc \
++        make \
++        perl \
++        wget \
++        git \
++        python \
++        python-pygments \
++        riscv64-elf-gdb \
++        riscv64-elf-gcc \
++        riscv64-elf-binutils \
++        riscv64-elf-newlib \
++        qemu-emulators-full \
++        xxhash && \
++    \
++    pacman -Scc --noconfirm
+ 
+-RUN pacman -Syu --noconfirm
+-
+-RUN pacman -S --noconfirm gcc make perl wget git python
+-
+-RUN pacman -S --noconfirm riscv64-elf-gdb riscv64-elf-gcc riscv64-elf-binutils riscv64-elf-newlib qemu-emulators-full
+-
+-RUN wget -P ~ https://github.com/cyrus-and/gdb-dashboard/raw/master/.gdbinit && \
+-    pacman -S --noconfirm python-pygments
++RUN \
++    wget -O ~/.gdbinit https://gitee.com/ftutorials/gdb-dashboard/raw/master/.gdbinit && \
++    echo "set auto-load safe-path /" >> ~/.gdbinit
+diff --git a/Makefile b/Makefile
+index b971308..e443229 100644
+--- a/Makefile
++++ b/Makefile
+@@ -157,6 +157,9 @@ UPROGS=\
+ 	$U/_grind\
+ 	$U/_wc\
+ 	$U/_zombie\
++	$U/_sleep\
++	$U/_pingpong\
++	$U/_find\
+ 
+ 
+ ifeq ($(LAB),syscall)
+@@ -219,7 +222,8 @@ docker:
+ 	docker $(DOCKER_RUN_ARGS)
+ 
+ # try to generate a unique GDB port
+-GDBPORT = $(shell expr `id -u` % 5000 + 25000)
++# GDBPORT = $(shell expr `id -u` % 5000 + 25000)
++GDBPORT = 25000
+ # QEMU's gdb stub command line changed in 0.11
+ QEMUGDB = $(shell if $(QEMU) -help | grep -q '^-gdb'; \
+ 	then echo "-gdb tcp::$(GDBPORT)"; \
+@@ -242,15 +246,8 @@ qemu-gdb: $K/kernel .gdbinit fs.img
+ 	@echo "*** Now run 'gdb' in another window." 1>&2
+ 	$(QEMU) $(QEMUOPTS) -S $(QEMUGDB)
+ 
+-GDBARGS = 
+-GDBARGS += -ex 'set architecture riscv:rv64'
+-GDBARGS += -ex 'target remote 127.0.0.1:$(GDBPORT)'
+-GDBARGS += -ex 'symbol-file kernel/kernel'
+-GDBARGS += -ex 'set riscv use-compressed-breakpoints yes'
+-
+-
+ gdb: 
+-	$(GDB) $(GDBARGS)
++	$(GDB)
+ 
+ ##
+ ##  FOR testing lab grading script
+diff --git a/commands.gdb b/commands.gdb
+new file mode 100644
+index 0000000..5d4cd10
+--- /dev/null
++++ b/commands.gdb
+@@ -0,0 +1,8 @@
++b proc.c:433
++c
++p cpus[$tp]->proc->name
++delete
++b *0x800029f0
++c
++p cpus[$tp]->proc->name
++da                            
+\ No newline at end of file
+diff --git a/gradelib.py b/gradelib.py
+index 4a94595..991c130 100644
+--- a/gradelib.py
++++ b/gradelib.py
+@@ -222,7 +222,7 @@ def make(*target):
+     post_make()
+ 
+ def show_command(cmd):
+-    from pipes import quote
++    from shlex import quote
+     print("\n$", " ".join(map(quote, cmd)))
+ 
+ def maybe_unlink(*paths):
+diff --git a/user/find.c b/user/find.c
+new file mode 100644
+index 0000000..a5c9957
+--- /dev/null
++++ b/user/find.c
+@@ -0,0 +1,91 @@
++#include "kernel/types.h"
++#include "kernel/stat.h"
++#include "user/user.h"
++#include "kernel/fs.h"
++
++void find(char *path, const char *filename) {
++    char buf[512], *p;
++    int fd;
++    struct dirent de;
++    struct stat st;
++
++    // 打开路径，获取文件描述符
++    if ((fd = open(path, 0)) < 0) {
++        fprintf(2, "find: cannot open %s\n", path);
++        return;
++    }
++
++    // 通过文件描述符，获取文件/目录的状态信息
++    if (fstat(fd, &st) < 0) {
++        fprintf(2, "find: cannot stat %s\n", path);
++        close(fd);
++        return;
++    }
++
++    // 只处理目录类型
++    if (st.type != T_DIR) {
++        fprintf(2, "find: %s is not a directory\n", path);
++        close(fd);
++        return;
++    }
++
++    // 确保路径拼接不会溢出
++    if (strlen(path) + 1 + DIRSIZ + 1 > sizeof(buf)) {
++        printf("find: path too long\n");
++        close(fd);
++        return;
++    }
++  
++    // 遍历目录中的所有条目
++    strcpy(buf, path);
++    p = buf + strlen(buf);
++    *p++ = '/';  // 在路径末尾加上'/'，为拼接文件名做准备
++
++    while (read(fd, &de, sizeof(de)) == sizeof(de)) {
++        // 无效/空闲的目录项
++        if (de.inum == 0) continue;
++
++        // 将当前目录项的文件名拼接到路径末尾
++        memmove(p, de.name, DIRSIZ);
++        p[DIRSIZ] = 0; 
++
++        // 获取拼接后完整路径的状态信息
++        if (stat(buf, &st) < 0) {
++            printf("find: cannot stat %s\n", buf);
++            continue;
++        }
++
++        // 根据文件类型进行处理
++        switch (st.type) {
++            case T_FILE:
++                // 如果是文件类型，检查文件名是否匹配
++                if (strcmp(de.name, filename) == 0) {
++                    printf("%s\n", buf);
++                }
++                break;
++
++            case T_DIR:
++                // 如果是目录类型，首先检查文件名是否匹配
++                if (strcmp(de.name, filename) == 0) {
++                    printf("%s\n", buf);
++                }
++                
++                // 递归查找，但要跳过 '.' 和 '..' 目录，防止无限循环
++                if (strcmp(de.name, ".") != 0 && strcmp(de.name, "..") != 0) {
++                    find(buf, filename);
++                }
++                break;
++        }
++    }
++
++    close(fd);
++}
++
++int main(int argc, char *argv[]) {
++    if (argc != 3) {
++        fprintf(2, "Usage: find <directory> <filename>\n");
++        exit(1);
++    }
++    find(argv[1], argv[2]);
++    exit(0);
++}
+\ No newline at end of file
+diff --git a/user/pingpong.c b/user/pingpong.c
+new file mode 100644
+index 0000000..ba63952
+--- /dev/null
++++ b/user/pingpong.c
+@@ -0,0 +1,76 @@
++#include "kernel/types.h"
++#include "user/user.h"
++
++int main(int argc, char *argv[]) {
++    // 定义两个管道的文件描述符
++    int f2c[2];
++    int c2f[2];
++  
++    // 创建管道
++    pipe(f2c);
++    pipe(c2f);
++
++    // 创建子进程
++    int pid = fork();
++
++    if (pid < 0) {
++        fprintf(2, "fork failed\n");
++        exit(1);
++    }
++
++    // 子进程
++    if (pid == 0) {
++        close(f2c[1]); 
++        close(c2f[0]);
++
++        int parent_pid;
++        int my_pid = getpid();
++
++        // 从管道读取数据
++        if (read(f2c[0], &parent_pid, sizeof(parent_pid)) != sizeof(parent_pid)) {
++            fprintf(2, "child: read from parent failed\n");
++            exit(1);
++        }
++        
++        printf("%d: received ping from pid %d\n", my_pid, parent_pid); 
++
++        // 向管道写入数据
++        if (write(c2f[1], &my_pid, sizeof(my_pid)) != sizeof(my_pid)) { 
++            fprintf(2, "child: write to parent failed\n");
++            exit(1);
++        }
++
++        close(f2c[0]);
++        close(c2f[1]);
++        exit(0);
++
++    } else {
++        // 父进程
++        close(f2c[0]);
++        close(c2f[1]); 
++
++        int child_pid_from_pipe;
++        int my_pid = getpid();
++
++        // 向管道写入数据
++        if (write(f2c[1], &my_pid, sizeof(my_pid)) != sizeof(my_pid)) { 
++            fprintf(2, "parent: write to child failed\n");
++            exit(1);
++        }
++        
++        // 从管道读取数据
++        if (read(c2f[0], &child_pid_from_pipe, sizeof(child_pid_from_pipe)) != sizeof(child_pid_from_pipe)) {
++            fprintf(2, "parent: read from child failed\n");
++            exit(1);
++        }
++
++        printf("%d: received pong from pid %d\n", my_pid, child_pid_from_pipe);
++
++        // 等待子进程结束并清理
++        wait(0);
++
++        close(f2c[1]);
++        close(c2f[0]);
++        exit(0);
++    }
++}
+\ No newline at end of file
+diff --git a/user/sleep.c b/user/sleep.c
+new file mode 100644
+index 0000000..5da4c03
+--- /dev/null
++++ b/user/sleep.c
+@@ -0,0 +1,13 @@
++#include "kernel/types.h"
++#include "user.h"
++
++int main(int argc, char* argv[]) {
++    if (argc != 2) {
++        printf("Sleep needs one argument!\n");
++        exit(-1);
++    }
++    int ticks = atoi(argv[1]);
++    sleep(ticks);
++    printf("(Nothing happens for a little while...)\n");
++    exit(0);
++}
+\ No newline at end of file
