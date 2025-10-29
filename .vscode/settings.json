@@ -1,0 +1,9 @@
+{
+    "files.associations": {
+        "riscv.h": "c",
+        "date.h": "c",
+        "defs.h": "c",
+        "spinlock.h": "c",
+        "proc.h": "c"
+    }
+}

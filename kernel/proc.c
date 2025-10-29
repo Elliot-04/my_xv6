@@ -291,11 +291,36 @@ void reparent(struct proc *p) {
   }
 }
 
+// 用于将进程状态转换为小写字符串
+static const char *states[] = {
+  [UNUSED]    "unused",
+  [SLEEPING]  "sleep",
+  [RUNNABLE]  "runble",
+  [RUNNING]   "run",
+  [ZOMBIE]    "zombie",
+};
+
 // Exit the current process.  Does not return.
 // An exited process remains in the zombie state
 // until its parent calls wait().
 void exit(int status) {
   struct proc *p = myproc();
+
+  // 打印父进程信息
+  if (p->parent) {
+    exit_info("proc %d exit, parent pid %d, name %s, state %s\n", p->pid, p->parent->pid, p->parent->name, states[p->parent->state]);
+  }
+
+  // 打印子进程信息
+  int child_num = 0;
+  struct proc *pp;
+  for (pp = proc; pp < &proc[NPROC]; pp++) {
+    // Find a child of the current process.
+    if (pp->parent == p) {
+      exit_info("proc %d exit, child %d, pid %d, name %s, state %s\n", p->pid, child_num, pp->pid, pp->name, states[pp->state]);
+      child_num++;
+    }
+  }
 
   if (p == initproc) panic("init exiting");
 
@@ -356,7 +381,7 @@ void exit(int status) {
 
 // Wait for a child process to exit and return its pid.
 // Return -1 if this process has no children.
-int wait(uint64 addr) {
+int wait(uint64 addr, int flags) {
   struct proc *np;
   int havekids, pid;
   struct proc *p = myproc();
@@ -398,6 +423,12 @@ int wait(uint64 addr) {
     if (!havekids || p->killed) {
       release(&p->lock);
       return -1;
+    }
+
+    // 非阻塞模式
+    if (flags == 1) {
+      release(&p->lock);
+      return -1; 
     }
 
     // Wait for a child to exit.
