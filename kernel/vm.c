@@ -43,6 +43,55 @@ void vmprint_walk(pagetable_t pagetable, int level, uint64 va_prefix) {
   }
 }
 
+// 仿照 kvminit 创建内核页表, 不映射 CLINT
+pagetable_t kvmcreate() {
+  pagetable_t kpt = (pagetable_t)kalloc();
+  if (kpt == 0) return 0;
+  memset(kpt, 0, PGSIZE);
+
+  // uart registers
+  if(mappages(kpt, UART0, PGSIZE, UART0, PTE_R | PTE_W) != 0) goto bad;
+
+  // virtio mmio disk interface
+  if(mappages(kpt, VIRTIO0, PGSIZE, VIRTIO0, PTE_R | PTE_W) != 0) goto bad;
+
+  // PLIC
+  if(mappages(kpt, PLIC, 0x400000, PLIC, PTE_R | PTE_W) != 0) goto bad;
+
+  // map kernel text executable and read-only.
+  if(mappages(kpt, KERNBASE, (uint64)etext - KERNBASE, KERNBASE, PTE_R | PTE_X) != 0) goto bad;
+
+  // map kernel data and the physical RAM we'll make use of.
+  if(mappages(kpt, (uint64)etext, PHYSTOP - (uint64)etext, (uint64)etext, PTE_R | PTE_W) != 0) goto bad;
+
+  // map the trampoline for trap entry/exit to
+  // the highest virtual address in the kernel.
+  if(mappages(kpt, TRAMPOLINE, PGSIZE, (uint64)trampoline, PTE_R | PTE_X) != 0) goto bad;
+
+  return kpt;
+
+bad:
+  return 0;
+}
+
+// 释放内核页表, 不需要释放叶子节点指向的物理内存
+void kvmfree(pagetable_t kpt) {
+  for (int i = 0; i < 512; i++) {
+    pte_t pte = kpt[i];
+    if ((pte & PTE_V)) {
+      kpt[i] = 0;
+      // 非叶，递归释放下一级页表
+      if ((pte & (PTE_R|PTE_W|PTE_X)) == 0) {
+        uint64 child = PTE2PA(pte);
+        kvmfree((pagetable_t)child);
+      }
+      // if leaf, do nothing
+    }
+  }
+  // 释放当前页表页
+  kfree((void*)kpt);
+}
+
 /*
  * create a direct-map page table for the kernel.
  */
