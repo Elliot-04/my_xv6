@@ -15,6 +15,34 @@ extern char etext[];  // kernel.ld sets this to end of kernel code.
 
 extern char trampoline[];  // trampoline.S
 
+void vmprint(pagetable_t pgtbl) {
+  printf("page table %p\n", pgtbl);
+  vmprint_walk(pgtbl, 2, 0);
+}
+
+void vmprint_walk(pagetable_t pagetable, int level, uint64 va_prefix) {
+  for (int i = 0; i < 512; i++) {
+    pte_t pte = pagetable[i];
+    if (pte & PTE_V) {
+      if (level == 2) printf("||");
+      else if (level == 1) printf("||   ||");
+      else printf("||   ||   ||");
+
+      uint64 va = va_prefix | ((uint64)i << PXSHIFT(level));
+
+      if ((pte & (PTE_R|PTE_W|PTE_X)) == 0 && level > 0) {
+        // Non-leaf
+        printf("idx: %d: pa: %p, flags: ----\n", i, PTE2PA(pte));
+        vmprint_walk((pagetable_t)PTE2PA(pte), level - 1, va);
+      } else {
+        // Leaf
+        printf("idx: %d: va: %p -> pa: %p, flags: ", i, va, PTE2PA(pte));
+        printf("%s%s%s%s\n", (pte & PTE_R) ? "r" : "-", (pte & PTE_W) ? "w" : "-", (pte & PTE_X) ? "x" : "-", (pte & PTE_U) ? "u" : "-");
+      }
+    }
+  }
+}
+
 /*
  * create a direct-map page table for the kernel.
  */
